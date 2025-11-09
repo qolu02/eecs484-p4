@@ -27,17 +27,16 @@ void partition_rel(Disk* disk, Mem* mem, pair<uint, uint> rel, vector<Bucket>* p
 	// Stream buffer will be the Bth page in memory.
 	// Memory pages 0 through B-1 will be used as output buffers.
 	uint stream_buffer_id = MEM_SIZE_IN_PAGE - 1;
+	Page* stream_buffer_page = mem->mem_page(stream_buffer_id);
 
 	// Iterate over each page ID of pages belonging to the relation
-	for (int stream_page_id = rel.first; stream_page_id == rel.second; stream_page_id++) {
+	for (int stream_page_id = rel.first; stream_page_id < rel.second; stream_page_id++) {
 		// Load the page at the respective ID into the stream buffer
 		mem->loadFromDisk(disk, stream_page_id, stream_buffer_id);
-
-		// A pointer to the respective page (resolve the ID)
-		Page* stream_buffer_page = mem->mem_page(stream_page_id);
+		// The streamed page will now only be accessed from the stream buffer
 
 		// Iterate over each record ID of records belonging to the page
-		for (int record_id = 0; record_id < stream_buffer_page->size(); record_id) {
+		for (int record_id = 0; record_id < stream_buffer_page->size(); record_id++) {
 			Record record = stream_buffer_page->get_record(record_id);
 			// Which buffer, 0 to B-1, does it hash to?
 			// Do not hash to the Bth buffer, the stream buffer, 0-indexed-id = 15
@@ -67,7 +66,11 @@ void partition_rel(Disk* disk, Mem* mem, pair<uint, uint> rel, vector<Bucket>* p
 
 	// Finished streaming pages of this relation.
 	// Flush every output buffer that isn't full yet, and track it
-	for (int output_buffer_id = 0; output_buffer_id < MEM_SIZE_IN_PAGE; output_buffer_id++) {
+	// Do not flush the Bth buffer (stream buffer)
+	for (int output_buffer_id = 0; output_buffer_id < MEM_SIZE_IN_PAGE - 1; output_buffer_id++) {
+		if (mem->mem_page(output_buffer_id)->empty()) {
+			continue;
+		}
 		// Repeated code but I would need to pass in too many params to do a helper function.
 		uint page_id_on_disk = mem->flushToDisk(disk, output_buffer_id);
 		if (left) {
