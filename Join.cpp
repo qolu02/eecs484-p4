@@ -4,24 +4,6 @@
 
 using namespace std;
 
-/*
- * Input: Disk, Memory, Disk page ids for left relation, Disk page ids for right relation
- * Output: Vector of Buckets of size (MEM_SIZE_IN_PAGE - 1) after partition
- */
-vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
-                         pair<uint, uint> right_rel) {
-	// Initialize B-1 buckets.
-	// Each bucket corresponds to a specific output buffer.
-	// Every time that output buffer is filled or finished, the buffer flushes and gets a page ID on disk that it writes to its bucket.
-	// A bucket represents a partition.
-	vector<Bucket> partitions(MEM_SIZE_IN_PAGE - 1, Bucket(disk));
-
-	partition_rel(disk, mem, left_rel, &partitions, true);
-	partition_rel(disk, mem, right_rel, &partitions, false);
-
-	return partitions;
-}
-
 // Stream all pages of a given relation through one buffer, hash into B-1 partitions
 void partition_rel(Disk* disk, Mem* mem, pair<uint, uint> rel, vector<Bucket>* partitions, bool left) {
 	// Stream buffer will be the Bth page in memory.
@@ -30,13 +12,13 @@ void partition_rel(Disk* disk, Mem* mem, pair<uint, uint> rel, vector<Bucket>* p
 	Page* stream_buffer_page = mem->mem_page(stream_buffer_id);
 
 	// Iterate over each page ID of pages belonging to the relation
-	for (int stream_page_id = rel.first; stream_page_id < rel.second; stream_page_id++) {
+	for (uint stream_page_id = rel.first; stream_page_id < rel.second; stream_page_id++) {
 		// Load the page at the respective ID into the stream buffer
 		mem->loadFromDisk(disk, stream_page_id, stream_buffer_id);
 		// The streamed page will now only be accessed from the stream buffer
 
 		// Iterate over each record ID of records belonging to the page
-		for (int record_id = 0; record_id < stream_buffer_page->size(); record_id++) {
+		for (uint record_id = 0; record_id < stream_buffer_page->size(); record_id++) {
 			Record record = stream_buffer_page->get_record(record_id);
 			// Which buffer, 0 to B-1, does it hash to?
 			// Do not hash to the Bth buffer, the stream buffer, 0-indexed-id = 15
@@ -67,7 +49,7 @@ void partition_rel(Disk* disk, Mem* mem, pair<uint, uint> rel, vector<Bucket>* p
 	// Finished streaming pages of this relation.
 	// Flush every output buffer that isn't full yet, and track it
 	// Do not flush the Bth buffer (stream buffer)
-	for (int output_buffer_id = 0; output_buffer_id < MEM_SIZE_IN_PAGE - 1; output_buffer_id++) {
+	for (uint output_buffer_id = 0; output_buffer_id < MEM_SIZE_IN_PAGE - 1; output_buffer_id++) {
 		if (mem->mem_page(output_buffer_id)->empty()) {
 			continue;
 		}
@@ -85,11 +67,31 @@ void partition_rel(Disk* disk, Mem* mem, pair<uint, uint> rel, vector<Bucket>* p
 }
 
 /*
+ * Input: Disk, Memory, Disk page ids for left relation, Disk page ids for right relation
+ * Output: Vector of Buckets of size (MEM_SIZE_IN_PAGE - 1) after partition
+ */
+vector<Bucket> partition(Disk* disk, Mem* mem, pair<uint, uint> left_rel,
+                         pair<uint, uint> right_rel) {
+	// Initialize B-1 buckets.
+	// Each bucket corresponds to a specific output buffer.
+	// Every time that output buffer is filled or finished, the buffer flushes and gets a page ID on disk that it writes to its bucket.
+	// A bucket represents a partition.
+	vector<Bucket> partitions(MEM_SIZE_IN_PAGE - 1, Bucket(disk));
+
+	partition_rel(disk, mem, left_rel, &partitions, true);
+	partition_rel(disk, mem, right_rel, &partitions, false);
+
+	return partitions;
+}
+
+/*
  * Input: Disk, Memory, Vector of Buckets after partition
  * Output: Vector of disk page ids for join result
  */
 vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 	vector<uint> disk_pages;
+
+	mem->reset();
 
 	// Which relation is smaller?
 	uint num_left_records = 0;
@@ -99,6 +101,14 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 		num_right_records += e.num_right_rel_record;
 	}
 	bool left_smaller = num_left_records < num_right_records;
+
+	// stream buffer B-1 (0-indexed: B-2)
+	uint stream_buffer_id = MEM_SIZE_IN_PAGE - 2;
+	Page* stream_buffer_page = mem->mem_page(stream_buffer_id);
+
+	// output buffer B (0-indexed: B-1)
+	uint output_buffer_id = MEM_SIZE_IN_PAGE - 1;
+	Page* output_buffer_page = mem->mem_page(output_buffer_id);
 
 	// For each partition of the smaller relation, stream the pages of the larger relation
 	for (uint partition_id = 0; partition_id < partitions.size(); partition_id++) {
@@ -124,14 +134,6 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 		// B-1 is the stream input buffer.
 		// Bth is the output buffer.
 
-		// stream buffer B-1 (0-indexed: B-2)
-		uint stream_buffer_id = MEM_SIZE_IN_PAGE - 2;
-		Page* stream_buffer_page = mem->mem_page(stream_buffer_id);
-
-		// output buffer B (0-indexed: B-1)
-		uint output_buffer_id = MEM_SIZE_IN_PAGE - 1;
-		Page* output_buffer_page = mem->mem_page(output_buffer_id);
-
 		// clear layover from previous partition in hash buffers
 		for (uint hash_buffer_id = 0; hash_buffer_id < MEM_SIZE_IN_PAGE - 2; hash_buffer_id++) {
 			mem->mem_page(hash_buffer_id)->reset();
@@ -143,7 +145,7 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 			mem->loadFromDisk(disk, srel[srel_page_index], stream_buffer_id);
 
 			// Iterate over each record ID of records belonging to the page
-			for (int srel_record_id = 0; srel_record_id < stream_buffer_page->size(); srel_record_id++) {
+			for (uint srel_record_id = 0; srel_record_id < stream_buffer_page->size(); srel_record_id++) {
 				Record record = stream_buffer_page->get_record(srel_record_id);
 
 				// x mod (16 - 2)
@@ -163,14 +165,14 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 			mem->loadFromDisk(disk, lrel[lrel_page_index], stream_buffer_id);
 
 			// Iterate over each record ID of records belonging to the page
-			for (int lrel_record_id = 0; lrel_record_id < stream_buffer_page->size(); lrel_record_id++) {
+			for (uint lrel_record_id = 0; lrel_record_id < stream_buffer_page->size(); lrel_record_id++) {
 				Record lrel_record = stream_buffer_page->get_record(lrel_record_id);
 
 				uint target_hash_buffer_id = lrel_record.probe_hash() % (MEM_SIZE_IN_PAGE - 2);
 				Page* target_hash_buffer = mem->mem_page(target_hash_buffer_id);
 
 				// Compare the record to existing records in the partition
-				for (int srel_record_id = 0; srel_record_id < target_hash_buffer->size(); srel_record_id++) {
+				for (uint srel_record_id = 0; srel_record_id < target_hash_buffer->size(); srel_record_id++) {
 					Record srel_record = target_hash_buffer->get_record(srel_record_id);
 
 					if (lrel_record == srel_record) {
@@ -190,11 +192,11 @@ vector<uint> probe(Disk* disk, Mem* mem, vector<Bucket>& partitions) {
 				}
 			}
 		}
+	}
 
-		if (!output_buffer_page->empty()) {
-			uint page_id_on_disk = mem->flushToDisk(disk, output_buffer_id);
-			disk_pages.push_back(page_id_on_disk);
-		}
+	if (!output_buffer_page->empty()) {
+		uint page_id_on_disk = mem->flushToDisk(disk, output_buffer_id);
+		disk_pages.push_back(page_id_on_disk);
 	}
 
 	return disk_pages;
